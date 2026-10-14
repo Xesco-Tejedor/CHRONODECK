@@ -100,20 +100,27 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 8px;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: bold;
     color: var(--zx-b-cyan);
     text-transform: uppercase;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .ui-group {
+    display: flex;
+    gap: 6px;
   }
 
   .btn-retro {
     background: var(--zx-black);
     color: var(--zx-b-yellow);
     border: 2px solid var(--zx-b-yellow);
-    padding: 4px 10px;
+    padding: 4px 8px;
     font-family: inherit;
     font-weight: bold;
-    font-size: 12px;
+    font-size: 11px;
     cursor: pointer;
     text-transform: uppercase;
   }
@@ -186,9 +193,10 @@
 <div id="cabinet">
   <div id="ui-bar">
     <span>SINCLAIR ZX RESEARCH // BNE-TFM-86</span>
-    <div>
+    <div class="ui-group">
       <button id="btn-crt" class="btn-retro">CRT: ON</button>
-      <button id="btn-sound" class="btn-retro">AUDIO BEEPER: ON</button>
+      <button id="btn-music" class="btn-retro">MÚSICA: ON</button>
+      <button id="btn-sound" class="btn-retro">FX: ON</button>
     </div>
   </div>
 
@@ -247,12 +255,43 @@ const canvas = document.getElementById('zx-canvas');
 const ctx = canvas.getContext('2d', { alpha: false });
 ctx.imageSmoothingEnabled = false;
 
-// --- SISTEMA DE SONIDO BEEPER (WEB AUDIO API) ---
+// --- SISTEMA DE AUDIO Y MELODÍA 8-BIT (WEB AUDIO API) ---
+const NOTE = {
+  _: 0,
+  A2: 110.00, Bb2: 116.54, C3: 130.81, Cs3: 138.59, D3: 146.83, E3: 164.81, F3: 174.61, G3: 196.00, A3: 220.00, Bb3: 233.08,
+  D4: 293.66, A4: 440.00, C5: 523.25, Cs5: 554.37, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.00, Bb5: 932.33
+};
+
+const CHRONODECK_THEME = [
+  // --- PARTE A (Dm -> A7 -> Gm -> A7) ---
+  ['D5', 'D3', 2], ['_', 'D4', 1], ['A4', 'D3', 1],
+  ['D5', 'D3', 1], ['F5', 'D4', 1], ['E5', 'D3', 1], ['D5', 'A3', 1],
+  ['Cs5', 'A2', 1], ['A4', 'A3', 1], ['E5', 'A2', 1], ['A4', 'A3', 1],
+  ['G5', 'A2', 1], ['F5', 'G3', 1], ['E5', 'F3', 1], ['D5', 'E3', 1],
+  ['D5', 'D3', 2], ['_', 'D4', 1], ['A4', 'D3', 1],
+  ['D5', 'D3', 1], ['F5', 'F3', 1], ['G5', 'G3', 1], ['A5', 'A3', 1],
+  ['Bb5', 'Bb2', 1], ['A5', 'Bb3', 1], ['G5', 'Bb2', 1], ['F5', 'Bb3', 1],
+  ['E5', 'A2', 1], ['Cs5', 'A3', 1], ['A4', 'E3', 1], ['_', 'A2', 1],
+  // --- PARTE B (F -> C -> Gm -> A7 -> Dm) ---
+  ['F5', 'F3', 2], ['_', 'C3', 1], ['C5', 'F3', 1],
+  ['F5', 'F3', 1], ['A5', 'C3', 1], ['G5', 'F3', 1], ['F5', 'A3', 1],
+  ['E5', 'C3', 1], ['C5', 'G3', 1], ['G5', 'C3', 1], ['C5', 'G3', 1],
+  ['Bb5', 'C3', 1], ['A5', 'G3', 1], ['G5', 'E3', 1], ['E5', 'C3', 1],
+  ['D5', 'D3', 1], ['E5', 'E3', 1], ['F5', 'F3', 1], ['G5', 'G3', 1],
+  ['A5', 'G3', 1], ['Bb5', 'D3', 1], ['A5', 'G3', 1], ['G5', 'Bb2', 1],
+  ['F5', 'A2', 1], ['E5', 'E3', 1], ['D5', 'A3', 1], ['Cs5', 'A2', 1],
+  ['D5', 'D3', 3], ['_', 'A2', 1]
+];
+
 class ZXSoundSystem {
   constructor() {
     this.ctx = null;
-    this.enabled = true;
+    this.sfxEnabled = true;
+    this.musicEnabled = true;
     this.noiseBuffer = null;
+    this.musicStep = 0;
+    this.nextNoteTime = 0;
+    this.stepDuration = 0.11; // 150 BPM aprox
   }
 
   init() {
@@ -276,7 +315,7 @@ class ZXSoundSystem {
   }
 
   beep(freq = 440, duration = 0.08, type = 'square', slide = 0, vol = 0.12) {
-    if (!this.enabled || !this.ctx) return;
+    if (!this.sfxEnabled || !this.ctx) return;
     try {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -295,7 +334,7 @@ class ZXSoundSystem {
   }
 
   noise(duration = 0.15, vol = 0.15) {
-    if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
+    if (!this.sfxEnabled || !this.ctx || !this.noiseBuffer) return;
     try {
       const src = this.ctx.createBufferSource();
       src.buffer = this.noiseBuffer;
@@ -309,7 +348,48 @@ class ZXSoundSystem {
     } catch (e) {}
   }
 
-  // Efectos específicos
+  // Actualizador del secuenciador de música por pasos en bucle
+  updateMusic() {
+    if (!this.musicEnabled || !this.ctx) return;
+    
+    while (this.nextNoteTime < this.ctx.currentTime + 0.1) {
+      const currentNoteData = CHRONODECK_THEME[this.musicStep];
+      const [melodyNote, bassNote, durationSteps] = currentNoteData;
+      const noteDuration = durationSteps * this.stepDuration;
+
+      // Canal Melodía (Onda cuadrada 8-bit)
+      if (NOTE[melodyNote] > 0) {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = NOTE[melodyNote];
+        gain.gain.setValueAtTime(0.065, this.nextNoteTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.nextNoteTime + noteDuration * 0.9);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(this.nextNoteTime);
+        osc.stop(this.nextNoteTime + noteDuration);
+      }
+
+      // Canal Bajo (Onda triángulo estilo SID/AY)
+      if (NOTE[bassNote] > 0) {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = NOTE[bassNote];
+        gain.gain.setValueAtTime(0.08, this.nextNoteTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.nextNoteTime + noteDuration * 0.85);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(this.nextNoteTime);
+        osc.stop(this.nextNoteTime + noteDuration);
+      }
+
+      this.nextNoteTime += noteDuration;
+      this.musicStep = (this.musicStep + 1) % CHRONODECK_THEME.length;
+    }
+  }
+
   playLoadPulse(high) {
     this.beep(high ? 2100 : 1050, 0.025, 'square', 0, 0.05);
   }
@@ -394,8 +474,16 @@ bindTouch('t-action', 'action');
 // Botones UI
 document.getElementById('btn-sound').addEventListener('click', (e) => {
   sfx.init();
-  sfx.enabled = !sfx.enabled;
-  e.target.textContent = `AUDIO BEEPER: ${sfx.enabled ? 'ON' : 'OFF'}`;
+  sfx.sfxEnabled = !sfx.sfxEnabled;
+  e.target.textContent = `FX: ${sfx.sfxEnabled ? 'ON' : 'OFF'}`;
+});
+document.getElementById('btn-music').addEventListener('click', (e) => {
+  sfx.init();
+  sfx.musicEnabled = !sfx.musicEnabled;
+  if (sfx.musicEnabled && sfx.ctx) {
+    sfx.nextNoteTime = sfx.ctx.currentTime + 0.05;
+  }
+  e.target.textContent = `MÚSICA: ${sfx.musicEnabled ? 'ON' : 'OFF'}`;
 });
 document.getElementById('btn-crt').addEventListener('click', (e) => {
   const layer = document.getElementById('crt-layer');
@@ -404,9 +492,8 @@ document.getElementById('btn-crt').addEventListener('click', (e) => {
   e.target.textContent = `CRT: ${active ? 'OFF' : 'ON'}`;
 });
 
-// --- SPRITES EN MATRICES DE PÍXELES (8x8 / 12x16 / 16x16) ---
+// --- SPRITES EN MATRICES DE PÍXELES ---
 const SPRITES = {
-  // Agente Forense Francesc (12x16)
   francesc: [
     "....YYYY....",
     "...YYYYYY...",
@@ -425,7 +512,6 @@ const SPRITES = {
     "..WW....WW..",
     "..WW....WW.."
   ],
-  // Cassette Tape (12x8)
   tape: [
     "YYYYYYYYYYYY",
     "YKKKKKKKKKKY",
@@ -436,7 +522,6 @@ const SPRITES = {
     "YKKKKKKKKKKY",
     "YYYYYYYYYYYY"
   ],
-  // Metadato JSON-LD / PREMIS (8x8)
   jsonld: [
     "..YYYY..",
     ".YBBBBY.",
@@ -447,7 +532,6 @@ const SPRITES = {
     ".YBBBBY.",
     "..YYYY.."
   ],
-  // Enemigo Burocracia / Obra Huérfana (12x12)
   burocracia: [
     "..RRRRRRRR..",
     ".RWWWWWWWWR.",
@@ -462,7 +546,6 @@ const SPRITES = {
     "..RR....RR..",
     "............"
   ],
-  // Enemigo Registro Volátil Z80 (12x12)
   z80bug: [
     ".M........M.",
     "..M..MM..M..",
@@ -503,7 +586,6 @@ function drawSprite(spriteLines, x, y, scale = 1, flipX = false, overrideColor =
   }
 }
 
-// --- UTILIDADES DE DIBUJO EN COORDENADAS ZX (256x192) ---
 function zxRect(x, y, w, h, color) {
   ctx.fillStyle = color;
   ctx.fillRect(Math.floor(OFF_X + x), Math.floor(OFF_Y + y), Math.floor(w), Math.floor(h));
@@ -528,7 +610,6 @@ function drawULABorder(mode = 'solid', color1 = PAL.BLACK, timer = 0) {
     ctx.fillStyle = color1;
     ctx.fillRect(0, 0, FULL_W, FULL_H);
   } else if (mode === 'loading') {
-    // Franjas de carga clásicas Rojo/Cyan de cassette ZX Spectrum
     let y = 0;
     let toggle = Math.floor(timer * 45) % 2 === 0;
     while (y < FULL_H) {
@@ -539,7 +620,6 @@ function drawULABorder(mode = 'solid', color1 = PAL.BLACK, timer = 0) {
       toggle = !toggle;
     }
   } else if (mode === 'data') {
-    // Franjas Azul/Amarillo de bloque de datos
     let y = 0;
     let toggle = Math.floor(timer * 80) % 2 === 0;
     while (y < FULL_H) {
@@ -550,7 +630,6 @@ function drawULABorder(mode = 'solid', color1 = PAL.BLACK, timer = 0) {
       toggle = !toggle;
     }
   }
-  // Limpiar área activa 256x192
   ctx.fillStyle = PAL.BLACK;
   ctx.fillRect(OFF_X, OFF_Y, SCR_W, SCR_H);
 }
@@ -581,22 +660,19 @@ let game = {
 };
 
 // ============================================================================
-// FASE 1: "LA CUEVA DEL AZIMUT" (ALINEACIÓN DE LISSAJOUS / OSCILOSCOPIO)
+// FASE 1: "LA CUEVA DEL AZIMUT"
 // ============================================================================
 let lvl1 = {
   playerPhase: 1.8,
   targetPhase: 0.0,
-  driftVel: 0.45,
   syncTime: 0,
   requiredSync: 5.0,
-  tapeTimeLeft: 25.0,
-  freqMod: 3.0
+  tapeTimeLeft: 25.0
 };
 
 function initLevel1() {
   lvl1.playerPhase = (Math.random() > 0.5 ? 1 : -1) * (1.2 + Math.random() * 1.0);
   lvl1.targetPhase = 0;
-  lvl1.driftVel = 0.4;
   lvl1.syncTime = 0;
   lvl1.tapeTimeLeft = 25.0;
   game.borderMode = 'solid';
@@ -610,15 +686,12 @@ function updateLevel1(dt) {
     return;
   }
 
-  // Deriva magnética de la cinta
   lvl1.targetPhase += Math.sin(game.timer * 1.7) * 0.65 * dt + Math.cos(game.timer * 3.1) * 0.35 * dt;
 
-  // Control del tornillo de Azimut con Izquierda / Derecha
   const adjustSpeed = 2.4;
   if (keys.left)  lvl1.playerPhase -= adjustSpeed * dt;
   if (keys.right) lvl1.playerPhase += adjustSpeed * dt;
 
-  // Diferencia de fase
   const diff = Math.abs(lvl1.playerPhase - lvl1.targetPhase);
   const isSynced = diff < 0.26;
 
@@ -640,17 +713,14 @@ function updateLevel1(dt) {
 }
 
 function drawLevel1() {
-  // Cabecera
   zxRect(0, 0, SCR_W, 20, PAL.BLUE);
   zxText("FASE 1: LA CUEVA DEL AZIMUT", 6, 3, PAL.B_YELLOW, 9);
   zxText(`TINTA: ${lvl1.tapeTimeLeft.toFixed(1)}s`, 182, 3, PAL.B_WHITE, 9);
   zxText("AJUSTA TORNILLO DEL CABEZAL [IZQ / DER]", 6, 12, PAL.B_CYAN, 7);
 
-  // Marco del Osciloscopio Dual
   zxStrokeRect(10, 26, 156, 110, PAL.B_CYAN);
   zxRect(11, 27, 154, 108, PAL.BLACK);
 
-  // Rejilla del osciloscopio
   ctx.strokeStyle = '#003333';
   ctx.beginPath();
   for (let gx = 30; gx < 166; gx += 20) {
@@ -666,7 +736,6 @@ function drawLevel1() {
   const diff = Math.abs(lvl1.playerPhase - lvl1.targetPhase);
   const isSynced = diff < 0.26;
 
-  // Dibujar las 2 ondas senoidales (Referencia Master vs Cabezal Player)
   for (let x = 0; x < 150; x++) {
     const t = (x / 20) + game.timer * 7;
     const yRef = 81 + Math.sin(t + lvl1.targetPhase) * 32;
@@ -676,7 +745,6 @@ function drawLevel1() {
     zxRect(13 + x, yPlr, 2, 2, isSynced ? PAL.B_GREEN : PAL.B_YELLOW);
   }
 
-  // Panel derecho: Curva de Lissajous X-Y y Tornillo de Azimut
   zxStrokeRect(172, 26, 74, 74, PAL.B_MAGENTA);
   zxText("LISSAJOUS XY", 177, 29, PAL.B_MAGENTA, 7);
   const phaseDelta = lvl1.playerPhase - lvl1.targetPhase;
@@ -686,7 +754,6 @@ function drawLevel1() {
     zxRect(lx, ly, 2, 2, isSynced ? PAL.B_GREEN : PAL.B_CYAN);
   }
 
-  // Tornillo de Azimut mecánico
   zxStrokeRect(172, 104, 74, 32, PAL.WHITE);
   zxText("ENTREHIERRO:", 176, 107, PAL.B_WHITE, 7);
   const angle = lvl1.playerPhase * 1.5;
@@ -700,13 +767,11 @@ function drawLevel1() {
   ctx.lineTo(cx + Math.cos(angle) * 7, cy + Math.sin(angle) * 7);
   ctx.stroke();
 
-  // Barra de sincronización de 5 segundos
   zxText("ESTABILIDAD DE FASE (MANTENER 5 SEG):", 10, 144, PAL.B_WHITE, 8);
   zxStrokeRect(10, 155, 236, 14, PAL.B_WHITE);
   const fillW = Math.min(232, (lvl1.syncTime / lvl1.requiredSync) * 232);
   zxRect(12, 157, fillW, 10, isSynced ? PAL.B_GREEN : PAL.B_YELLOW);
 
-  // Estado inferior
   const statusMsg = isSynced
     ? ">> SEÑAL FSK EN FASE OPTIMA - CAPTURANDO FLUJO <<"
     : "!! ERROR DE AZIMUT: AJUSTA FASE CON FLECHAS !!";
@@ -714,7 +779,7 @@ function drawLevel1() {
 }
 
 // ============================================================================
-// FASE 2: "EL TEMPLO DE NYQUIST-SHANNON" (MUESTREO FSK 44.1 kHz)
+// FASE 2: "EL TEMPLO DE NYQUIST-SHANNON"
 // ============================================================================
 let lvl2 = {
   playerX: 112,
@@ -747,9 +812,7 @@ function updateLevel2(dt) {
       y: 22,
       vy: 62 + Math.random() * 55 + (lvl2.progress * 0.4),
       good: isGood,
-      label: isGood
-        ? goodLabels[Math.floor(Math.random() * goodLabels.length)]
-        : badLabels[Math.floor(Math.random() * badLabels.length)]
+      label: isGood ? goodLabels[Math.floor(Math.random() * goodLabels.length)] : badLabels[Math.floor(Math.random() * badLabels.length)]
     });
     lvl2.spawnTimer = 0.42;
   }
@@ -759,7 +822,6 @@ function updateLevel2(dt) {
     const it = lvl2.items[i];
     it.y += it.vy * dt;
 
-    // Colisión con la pletina contenedora
     if (it.y + 12 >= py && it.y <= py + 14 && it.x + 32 >= lvl2.playerX && it.x <= lvl2.playerX + lvl2.playerW) {
       if (it.good) {
         lvl2.progress = Math.min(100, lvl2.progress + 8);
@@ -789,19 +851,16 @@ function updateLevel2(dt) {
 }
 
 function drawLevel2() {
-  // Cabecera
   zxRect(0, 0, SCR_W, 20, PAL.MAGENTA);
   zxText("FASE 2: TEMPLO NYQUIST-SHANNON", 6, 3, PAL.B_YELLOW, 9);
   zxText(`VIDAS: ${game.lives}`, 200, 3, PAL.B_WHITE, 9);
   zxText("CAPTURA PULSOS 44.1kHz (VERDE) | EVITA 96kHz/RUIDO (ROJO)", 6, 12, PAL.B_CYAN, 7);
 
-  // Fondo de espectro FSK sutil
   for (let i = 0; i < 16; i++) {
     const h = Math.abs(Math.sin(game.timer * 4 + i * 0.7)) * 30;
     zxRect(i * 16 + 2, 155 - h, 12, h, '#002222');
   }
 
-  // Dibujar ítems cayendo
   for (const it of lvl2.items) {
     const col = it.good ? PAL.B_GREEN : PAL.B_RED;
     zxStrokeRect(it.x, it.y, 36, 13, col);
@@ -809,12 +868,10 @@ function drawLevel2() {
     zxText(it.label, it.x + 18, it.y + 3, col, 7, 'center');
   }
 
-  // Jugador (Pletina Capturadora TZX)
   zxRect(lvl2.playerX, 160, lvl2.playerW, 12, PAL.B_CYAN);
   zxRect(lvl2.playerX + 3, 162, lvl2.playerW - 6, 5, PAL.BLACK);
   zxText(".TZX", lvl2.playerX + 17, 163, PAL.B_YELLOW, 7, 'center');
 
-  // Barra de contenedor .TZX inferior
   zxRect(0, 176, SCR_W, 16, PAL.BLUE);
   zxText(`BLOQUE TZX: ${lvl2.progress}%`, 8, 180, PAL.B_WHITE, 8);
   zxStrokeRect(96, 179, 152, 10, PAL.B_WHITE);
@@ -822,7 +879,7 @@ function drawLevel2() {
 }
 
 // ============================================================================
-// FASE 3: "EL LABERINTO DE LA BNE" (PLATAFORMAS 2D + PREMIS/JSON-LD)
+// FASE 3: "EL LABERINTO DE LA BNE"
 // ============================================================================
 let lvl3 = {
   px: 16, py: 148,
@@ -846,7 +903,7 @@ function initLevel3() {
   lvl3.collected = 0;
 
   lvl3.platforms = [
-    { x: 0,   y: 174, w: 256, h: 18 }, // Suelo planta baja BNE
+    { x: 0,   y: 174, w: 256, h: 18 },
     { x: 10,  y: 138, w: 75,  h: 6  },
     { x: 165, y: 138, w: 80,  h: 6  },
     { x: 75,  y: 104, w: 106, h: 6  },
@@ -899,10 +956,8 @@ function updateLevel3(dt) {
   lvl3.py += lvl3.vy * dt;
   lvl3.vy += gravity * dt;
 
-  // Límites laterales
   lvl3.px = Math.max(2, Math.min(SCR_W - 14, lvl3.px));
 
-  // Colisión con plataformas
   lvl3.onGround = false;
   for (const p of lvl3.platforms) {
     if (
@@ -918,7 +973,6 @@ function updateLevel3(dt) {
     }
   }
 
-  // Recolección de registros PREMIS / JSON-LD
   for (const t of lvl3.tokens) {
     if (!t.taken) {
       if (
@@ -935,13 +989,11 @@ function updateLevel3(dt) {
     }
   }
 
-  // Patrulla de enemigos (Obras Huérfanas y Registros Volátiles Z80)
   for (const en of lvl3.enemies) {
     en.x += en.vx * dt;
     if (en.x < en.minX) { en.x = en.minX; en.vx *= -1; }
     if (en.x > en.maxX) { en.x = en.maxX; en.vx *= -1; }
 
-    // Colisión con el Agente Francesc
     if (
       lvl3.px + 10 > en.x + 2 &&
       lvl3.px + 2 < en.x + 10 &&
@@ -962,17 +1014,14 @@ function updateLevel3(dt) {
 }
 
 function drawLevel3() {
-  // Cabecera
   zxRect(0, 0, SCR_W, 16, PAL.BLUE);
   zxText("FASE 3: PASILLOS DE LA BNE", 4, 4, PAL.B_YELLOW, 8);
   zxText(`METADATOS: ${lvl3.collected}/${lvl3.totalTokens}`, 168, 4, PAL.B_CYAN, 8);
 
-  // Estanterías decorativas de fondo BNE
   for (let sx = 18; sx < 240; sx += 48) {
     zxStrokeRect(sx, 22, 24, 150, '#001844');
   }
 
-  // Plataformas con tramado retro
   for (const p of lvl3.platforms) {
     zxRect(p.x, p.y, p.w, p.h, PAL.CYAN);
     for (let bx = p.x; bx < p.x + p.w; bx += 8) {
@@ -980,7 +1029,6 @@ function drawLevel3() {
     }
   }
 
-  // Tokens JSON-LD / PREMIS
   const blink = Math.floor(game.timer * 8) % 2 === 0;
   for (const t of lvl3.tokens) {
     if (!t.taken) {
@@ -989,18 +1037,16 @@ function drawLevel3() {
     }
   }
 
-  // Enemigos
   for (const en of lvl3.enemies) {
     const spr = en.type === 'burocracia' ? SPRITES.burocracia : SPRITES.z80bug;
     drawSprite(spr, en.x, en.y, 1, en.vx < 0);
   }
 
-  // Agente Forense Francesc
   drawSprite(SPRITES.francesc, lvl3.px, lvl3.py, 1, lvl3.facingLeft);
 }
 
 // ============================================================================
-// FASE 4: "LA BATALLA FINAL CHRONODECK" (BOSS FIGHT: BIT ROT PRIME)
+// FASE 4: "LA BATALLA FINAL CHRONODECK"
 // ============================================================================
 let lvl4 = {
   px: 120,
@@ -1040,21 +1086,19 @@ function updateLevel4(dt) {
 
   lvl4.shootCooldown -= dt;
 
-  // Recarga de energía Chronodeck
   if (!lvl4.chronoActive) {
     lvl4.chronoEnergy = Math.min(100, lvl4.chronoEnergy + 22 * dt);
-    lvl4.cpuFreq = 3.8 + Math.random() * 1.9; // Reloj Z80 inestable por Bit Rot
+    lvl4.cpuFreq = 3.8 + Math.random() * 1.9;
     game.borderColor = PAL.BLACK;
   } else {
     lvl4.chronoTimer -= dt;
-    lvl4.cpuFreq = 3.546900; // Reloj Z80 bloqueado con precisión forense
+    lvl4.cpuFreq = 3.546900;
     game.borderColor = PAL.CYAN;
     if (lvl4.chronoTimer <= 0) {
       lvl4.chronoActive = false;
     }
   }
 
-  // Acción: Activar Chronodeck (si está al 100%) o Disparar Rayo SHA-256
   if (keys.actionJustPressed) {
     if (!lvl4.chronoActive && lvl4.chronoEnergy >= 100) {
       lvl4.chronoActive = true;
@@ -1068,13 +1112,11 @@ function updateLevel4(dt) {
     }
   }
 
-  // Movimiento del Boss "Bit Rot Prime" (congelado o ralentizado si Chronodeck está activo)
   const timeScale = lvl4.chronoActive ? 0.08 : 1.0;
   lvl4.bossX += lvl4.bossVx * dt * timeScale;
   if (lvl4.bossX < 16) { lvl4.bossX = 16; lvl4.bossVx *= -1; }
   if (lvl4.bossX > SCR_W - 64) { lvl4.bossX = SCR_W - 64; lvl4.bossVx *= -1; }
 
-  // Ataques del Boss
   if (!lvl4.chronoActive && Math.random() < 0.065) {
     lvl4.bullets.push({
       x: lvl4.bossX + 24 + (Math.random() * 20 - 10),
@@ -1084,7 +1126,6 @@ function updateLevel4(dt) {
     sfx.noise(0.05, 0.06);
   }
 
-  // Actualizar proyectiles del Boss
   for (let i = lvl4.bullets.length - 1; i >= 0; i--) {
     const b = lvl4.bullets[i];
     b.y += b.vy * dt * timeScale;
@@ -1097,12 +1138,10 @@ function updateLevel4(dt) {
     if (b.y > SCR_H) lvl4.bullets.splice(i, 1);
   }
 
-  // Actualizar rayos SHA-256 del jugador
   for (let i = lvl4.playerLasers.length - 1; i >= 0; i--) {
     const l = lvl4.playerLasers[i];
     l.y -= 240 * dt;
 
-    // Impacto contra Bit Rot Prime
     if (
       l.x >= lvl4.bossX &&
       l.x <= lvl4.bossX + 48 &&
@@ -1114,7 +1153,6 @@ function updateLevel4(dt) {
         game.score += 200;
         sfx.playCoin();
       } else {
-        // Sin wait states inyectados, el daño es mínimo
         lvl4.bossHP = Math.max(0, lvl4.bossHP - 1);
         sfx.beep(180, 0.04, 'square', 0, 0.08);
       }
@@ -1134,7 +1172,6 @@ function updateLevel4(dt) {
 }
 
 function drawLevel4() {
-  // Cabecera HUD
   zxRect(0, 0, SCR_W, 24, PAL.RED);
   zxText("BOSS: BIT ROT PRIME", 4, 3, PAL.B_YELLOW, 8);
   zxStrokeRect(112, 3, 138, 8, PAL.B_WHITE);
@@ -1146,7 +1183,6 @@ function drawLevel4() {
     zxText("[WAIT STATES LOCK]", 162, 13, PAL.B_YELLOW, 8);
   }
 
-  // Dibujar a "Bit Rot Prime" (Masa de ruido estático de 8 bits)
   const bx = Math.floor(lvl4.bossX);
   const by = Math.floor(lvl4.bossY);
   zxStrokeRect(bx - 2, by - 2, 52, 36, lvl4.chronoActive ? PAL.B_CYAN : PAL.B_MAGENTA);
@@ -1163,28 +1199,23 @@ function drawLevel4() {
       }
     }
   }
-  // Ojos malignos del Bit Rot
   zxRect(bx + 10, by + 10, 8, 8, PAL.BLACK);
   zxRect(bx + 30, by + 10, 8, 8, PAL.BLACK);
   zxRect(bx + 12, by + 12, 4, 4, lvl4.chronoActive ? PAL.B_CYAN : PAL.B_RED);
   zxRect(bx + 32, by + 12, 4, 4, lvl4.chronoActive ? PAL.B_CYAN : PAL.B_RED);
 
-  // Proyectiles corruptos del Boss
   for (const b of lvl4.bullets) {
     zxRect(b.x, b.y, 5, 6, lvl4.chronoActive ? PAL.B_CYAN : PAL.B_RED);
     zxRect(b.x + 1, b.y + 1, 3, 4, PAL.B_YELLOW);
   }
 
-  // Rayos de preservación SHA-256 del jugador
   for (const l of lvl4.playerLasers) {
     zxRect(l.x, l.y, 3, 10, PAL.B_GREEN);
     zxText("SHA", l.x - 4, l.y - 6, PAL.B_WHITE, 6);
   }
 
-  // Agente Forense Francesc
   drawSprite(SPRITES.francesc, lvl4.px, 154, 1);
 
-  // Barra inferior del Módulo CHRONODECK
   zxRect(0, 174, SCR_W, 18, PAL.BLUE);
   zxText("CHRONODECK:", 4, 179, PAL.B_YELLOW, 8);
   zxStrokeRect(72, 178, 96, 10, PAL.B_WHITE);
@@ -1200,7 +1231,7 @@ function drawLevel4() {
 }
 
 // ============================================================================
-// PANTALLAS DE SISTEMA: TÍTULO, INTROS DE FASE, GAME OVER Y VICTORIA MICROHOBBY
+// PANTALLAS DE SISTEMA
 // ============================================================================
 function startLevelIntro(lvlNum) {
   game.currentLevel = lvlNum;
@@ -1228,31 +1259,25 @@ function resetFullGame() {
 }
 
 function drawTitleScreen() {
-  // Sonido de pulsos FSK sutil en pantalla de carga
   if (Math.floor(game.timer * 30) % 4 === 0) {
     sfx.playLoadPulse(Math.random() > 0.5);
   }
 
-  // Cabecera tipo ROM Sinclair
   zxRect(8, 8, 240, 22, PAL.BLUE);
   zxText("Program: CHRONODECK.TZX", 14, 11, PAL.B_WHITE, 8);
   zxText("Bytes: 49152  BNE-DEP-ENV", 14, 20, PAL.B_YELLOW, 7);
 
-  // Marco principal del título
   zxStrokeRect(8, 34, 240, 88, PAL.B_CYAN);
   zxText("CHRONODECK", 128, 42, PAL.B_YELLOW, 20, 'center');
   zxText("LA VENGANZA DEL AZIMUT", 128, 64, PAL.B_MAGENTA, 10, 'center');
 
-  // Cinta de cassette animada y Agente Francesc
   drawSprite(SPRITES.tape, 76, 82, 3);
   drawSprite(SPRITES.francesc, 166, 78, 2);
 
-  // Narrativa TFM
   zxText("AGENTE FORENSE FRANCESC VS BIT ROT", 128, 130, PAL.B_GREEN, 8, 'center');
   zxText("PRESERVACION DEL SOFTWARE ESPAÑOL (1983-1992)", 128, 141, PAL.WHITE, 7, 'center');
   zxText("DEPOSITO DE ENTORNO - BIBLIOTECA NACIONAL", 128, 151, PAL.B_CYAN, 7, 'center');
 
-  // Parpadeo de "Pulsa Espacio"
   if (Math.floor(game.timer * 3) % 2 === 0) {
     zxRect(18, 164, 220, 14, PAL.B_YELLOW);
     zxText("PULSA ESPACIO O ENTER PARA INICIAR", 128, 167, PAL.BLACK, 8, 'center');
@@ -1288,7 +1313,6 @@ function drawVictoryScreen() {
   zxRect(6, 6, 244, 180, PAL.BLACK);
   zxStrokeRect(6, 6, 244, 180, PAL.B_YELLOW);
 
-  // Cabecera estilo revista MicroHobby
   zxRect(10, 10, 236, 22, PAL.B_RED);
   zxText("MICROHOBBY // VEREDICTO TFM BNE", 128, 13, PAL.B_YELLOW, 9, 'center');
   zxText("PRESERVACION FORENSE COMPLETADA CON EXITO", 128, 23, PAL.B_WHITE, 7, 'center');
@@ -1296,7 +1320,6 @@ function drawVictoryScreen() {
   zxText("¡SOBRESALIENTE CUM LAUDE", 128, 40, PAL.B_GREEN, 10, 'center');
   zxText("EN PRESERVACION DIGITAL!", 128, 52, PAL.B_GREEN, 10, 'center');
 
-  // Tabla de puntuaciones estilo revista 1986
   zxStrokeRect(22, 68, 212, 68, PAL.B_CYAN);
   zxText("FIDELIDAD AZIMUT:        99%", 32, 74, PAL.B_WHITE, 8);
   zxText("MUESTREO FSK 44.1kHz:   100%", 32, 86, PAL.B_WHITE, 8);
@@ -1327,7 +1350,7 @@ function drawGameOverScreen() {
 }
 
 // ============================================================================
-// BUCLE PRINCIPAL DEL JUEGO (requestAnimationFrame + DeltaTime)
+// BUCLE PRINCIPAL DEL JUEGO
 // ============================================================================
 let lastTime = performance.now();
 
@@ -1336,7 +1359,9 @@ function gameLoop(now) {
   lastTime = now;
   game.timer += dt;
 
-  // Dibujar borde ULA y limpiar pantalla
+  // Actualizar secuenciador musical de 8 bits
+  sfx.updateMusic();
+
   drawULABorder(game.borderMode, game.borderColor, game.timer);
 
   switch (game.state) {
